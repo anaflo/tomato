@@ -1,0 +1,664 @@
+#!/usr/local/bin/python
+
+# Python 2.7 / python 2.6
+
+# 
+
+#chi_squared_test_on_counts.py
+
+#
+
+# Mathias Scharmann & Ana Florez
+
+# 05 Sept 2015
+
+
+
+# example usage:
+
+#
+
+#python chi_squared_test_on_counts.py --endo_a added_counts.perapr14.endosperm_1_counts_per_gene.txt.perapr14.endosperm_2_counts_per_gene.txt.txt --endo_b added_counts.perapr14.endosperm_3_counts_per_gene.txt.perapr14.endosperm_4_counts_per_gene.txt.txt
+
+
+
+#
+
+"""
+
+implementing a Chi-squared test 
+
+Do the read counts deviate from the expectation 2M:1P in at least one direction of the cross?
+
+- This test becomes significant if the deviation is only true for one of the directions of the cross
+
+- It does not tell anything obout the direction of the deviation
+
+-> thresholds of M:P read count proportions have to be enforced anyway
+
+- the minimum total read count of 10 was enforeced previously -> this total count is sufficient to make the test significant even in the critical cases of 10:0 resp. 0:10
+
+
+
+- p-values are FDR-corrected by Benjamini-Hochberg procedure -> q-values
+
+- genes are classified as "not imprinted" if q-value > 0.05
+
+
+
+"""
+
+	
+
+import os
+
+import sys
+
+import argparse
+
+import numpy
+
+from scipy.stats import chisquare
+
+import operator
+
+
+
+# checks for file and breaks script if not existing
+
+def extant_file(x):
+
+	"""
+
+	'Type' for argparse - checks that file exists but does not open.
+
+	"""
+
+	
+
+	if not os.path.exists(x):
+
+		print "Error: {0} does not exist".format(x)
+
+		exit()
+
+	x = str(x)
+
+	return x
+
+
+
+
+
+# breaks script if non-UNIX linebreaks in input files
+
+def linebreak_check(x):
+
+
+
+	if "\r" in open(x, "rb").readline():
+
+		print "Error: classic mac (CR) or DOS (CRLF) linebreaks in {0}".format(x)
+
+		exit()
+
+	
+
+# parses command line arguments, breaks script if not plausible
+
+def get_commandline_arguments ():
+
+	
+
+	parser = argparse.ArgumentParser()
+
+		
+
+	parser.add_argument("--endo_a", required=True, type=extant_file,
+
+		help="name / path of first endopserm file", metavar="FILE")
+
+	parser.add_argument("--endo_b", required=True, type=extant_file,
+
+		help="name / path of secod endosperm file", metavar="FILE")
+
+	
+
+	args = parser.parse_args()
+
+	
+
+	linebreak_check(args.endo_a)
+
+	linebreak_check(args.endo_b)
+
+	
+
+	# finish
+
+	return args
+
+	
+
+#############
+
+
+
+	
+
+def read_to_dict (file):
+
+	
+
+	data = {}
+
+	with open(file, "r") as INFILE:
+
+		header = INFILE.readline().strip("\n").split("\t")
+
+		for line in INFILE:
+
+			fields = line.strip("\n").split("\t")
+
+			data[str(fields[0])] = fields[1:]
+
+	
+
+	return data, header
+
+
+
+def do_chisq (a_data, b_data):
+
+	
+
+	all_genes = set(a_data.keys()).union(set(b_data.keys()))
+
+	
+
+	print "endosperm a genes found:	", len(set(a_data.keys()))
+
+	print "endosperm b (reciprocal of a) genes found:	", len(set(b_data.keys()))
+
+	print "overlap of expressed genes in the endosperms of the reciprocal cross:	", len(set(a_data.keys()).intersection(set(b_data.keys())))
+
+	print "total genes found:	", len(all_genes)
+
+		
+
+	outdict = {}
+
+	for gene in all_genes:
+
+		try:
+
+			a_ratio = a_data[gene][0]
+
+		except KeyError:
+
+			continue
+
+			# this ensures that genes which have not been 
+
+			# seen in BOTH reciprocal crosses' endosperms are NOT put into the output
+
+		try:
+
+			b_ratio = b_data[gene][0]
+
+		except KeyError:
+
+			continue 
+
+			# this ensures that genes which have not been 
+
+			# seen in BOTH reciprocal crosses' endosperms are NOT put into the output
+
+		
+
+		# Chi sqaured test on the read counts vs direction of the cross
+
+		
+
+		# maternal_a, paternal_a, maternal_b, paternal_b
+
+		obs_counts = [a_data[gene][1],a_data[gene][2]-a_data[gene][1],b_data[gene][1],b_data[gene][2]-b_data[gene][1]]
+
+		exp_counts = [a_data[gene][2]*0.667, a_data[gene][2]*0.333, b_data[gene][2]*0.667, b_data[gene][2]*0.333]
+
+	
+
+		test_result = chisquare(f_obs = obs_counts, f_exp = exp_counts )
+
+#		print obs_counts
+
+#		print exp_counts
+
+#		print test_result
+
+		
+
+		p_value = test_result[1]
+
+				
+
+		outdict[gene] = [a_ratio, b_ratio, p_value]
+
+			
+
+	return outdict	
+
+
+
+def enforce_thresholds_and_classify (q_value_dict):
+
+	
+
+	all_genes = q_value_dict.keys()
+
+	
+
+	MEGS = 0
+
+	MEGM = 0
+
+	PEGS = 0
+
+	PEGM = 0
+
+	bbiasS = 0
+
+	bbiasM = 0
+
+	abiasS = 0
+
+	abiasM = 0
+
+	notimp = 0
+
+	
+
+	outdict = {}
+
+	for gene in all_genes:
+
+		
+
+		a_ratio = q_value_dict[gene][0]
+
+		b_ratio = q_value_dict[gene][1]
+
+		q_val = q_value_dict[gene][2]		
+
+
+
+		# the THRESHOLDS:
+
+		if q_val <= 0.05:		
+
+			if a_ratio >= 0.8333 and b_ratio >= 0.8333:
+
+				if a_ratio >= 0.9166 and b_ratio >= 0.9166:
+
+					impr_cat = "MEG strong"
+
+					MEGS += 1
+
+				else:
+
+					impr_cat = "MEG moderate"
+
+					MEGM += 1
+
+			elif a_ratio <= 0.333 and b_ratio <= 0.333:
+
+				if a_ratio <= 0.167 and b_ratio <= 0.167:
+
+					impr_cat = "PEG strong"
+
+					PEGS += 1
+
+				else:
+
+					impr_cat = "PEG moderate"
+
+					PEGM += 1
+
+			elif a_ratio <= 0.333 and b_ratio >= 0.8333:
+
+				if a_ratio <= 0.167 and b_ratio >= 0.9166:
+
+					impr_cat = "B strong"
+
+					bbiasS += 1
+
+				else:
+
+					impr_cat = "B moderate"
+
+					bbiasM += 1
+
+			elif a_ratio >= 0.833 and b_ratio <= 0.333:
+
+				if a_ratio >= 0.9166 and b_ratio <= 0.167:
+
+					impr_cat = "A strong"
+
+					abiasS += 1
+
+				else:
+
+					impr_cat = "A moderate"
+
+					abiasM += 1
+
+			else:
+
+				impr_cat = "z: not imprinted"
+
+				notimp += 1		
+
+
+
+		else: # also dump genes here that are not significantly differing from 2M:1P ratio in any direction of the cross! i.e. qvalue > 0.05
+
+			impr_cat = "z: not imprinted"
+
+			notimp += 1
+
+				
+
+		outdict[gene] = [a_ratio, b_ratio, q_val, impr_cat]
+
+	
+
+	print "MEG strong:	", MEGS
+
+	print "MEG moderate:	", MEGM
+
+	print "PEG strong:	", PEGS
+
+	print "PEG moderate:	", PEGM
+
+	print "b bias strong:	", bbiasS
+
+	print "b bias moderate:	", bbiasM
+
+	print "a bias strong:	", abiasS
+
+	print "a bias moderate:	", abiasM
+
+	print "not imprinted:	", notimp
+
+	
+
+		
+
+	return outdict	
+
+
+
+
+
+def calc_ratio (mat_total_dict):
+
+	
+
+	ratio_dict = {}
+
+	for gene, counts in mat_total_dict.items():
+
+		mat = float(counts[0])
+
+		tot = float(counts[1])
+
+		ratio_dict[gene] = [mat/tot, mat, tot]
+
+	
+
+	return ratio_dict
+
+		
+
+def write_output (outdata, outfile):
+
+	
+
+	outlines = ["\t".join(["gene_name", "ratio_a", "ratio_b", "qvalue","imprint_category"])]
+
+	for gene in sorted(outdata.keys()):
+
+		outlines.append("\t".join([gene, str(outdata[gene][0]), str(outdata[gene][1]), str(outdata[gene][2]), outdata[gene][3]]))
+
+	
+
+	#print outlines
+
+	with open(outfile, "w") as OUTFILE:
+
+		OUTFILE.write("\n".join(outlines))
+
+	
+
+def bh_qvalues(pv):
+
+	"""
+
+	Return Benjamini-Hochberg FDR q-values corresponding to p-values C{pv}.
+
+
+
+	This function implements an algorithm equivalent to L{bh_rejected} but
+
+	yields a list of 'adjusted p-values', allowing for rejection decisions
+
+	based on any given threshold.
+
+
+
+	@type pv: list
+
+	@param pv: p-values from a multiple statistical test
+
+
+
+	@rtype: list
+
+	@return: adjusted p-values to be compared directly with the desired FDR
+
+	  level
+
+
+
+	# Copyright (C) 2008 Simone Leo - CRS4. All Rights Reserved.
+
+	# 
+
+	# Permission to use, copy, modify, and distribute this software and its
+
+	# documentation for educational, research, and not-for-profit purposes, without
+
+	# fee and without a signed licensing agreement, is hereby granted, provided
+
+	# that the above copyright notice, this paragraph and the following two
+
+	# paragraphs appear in all copies, modifications, and distributions. Contact
+
+	# CRS4, Parco Scientifico e Tecnologico, Edificio 1, 09010 PULA (CA - Italy),
+
+	# +3907092501 for commercial licensing opportunities.
+
+	# 
+
+	# IN NO EVENT SHALL CRS4 BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT, SPECIAL,
+
+	# INCIDENTAL, OR CONSEQUENTIAL DAMAGES, INCLUDING LOST PROFITS, ARISING OUT OF
+
+	# THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF CRS4 HAS BEEN ADVISED
+
+	# OF THE POSSIBILITY OF SUCH DAMAGE.
+
+	# 
+
+	# CRS4 SPECIFICALLY DISCLAIMS ANY WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+
+	# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+
+	# PURPOSE. THE SOFTWARE AND ACCOMPANYING DOCUMENTATION, IF ANY, PROVIDED
+
+	# HEREUNDER IS PROVIDED "AS IS". CRS4 HAS NO OBLIGATION TO PROVIDE MAINTENANCE,
+
+	# SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+
+	
+
+	this function was downloaded from:
+
+	http://pydoc.net/Python/ngslib/1.1.4/ngslib.fdr/
+
+	05 Sep 2015
+
+
+
+	"""
+
+	if not pv:
+
+		return []
+
+	m = len(pv)
+
+	args, pv = zip(*sorted(enumerate(pv), None, operator.itemgetter(1)))
+
+	if pv[0] < 0 or pv[-1] > 1:
+
+		raise ValueError("p-values must be between 0 and 1")
+
+	qvalues = m * [0]
+
+	mincoeff = pv[-1]
+
+	qvalues[args[-1]] = mincoeff
+
+	for j in xrange(m-2, -1, -1):
+
+		coeff = m*pv[j]/float(j+1)
+
+		if coeff < mincoeff:
+
+			mincoeff = coeff
+
+		qvalues[args[j]] = mincoeff
+
+	return qvalues
+
+
+
+def do_FDR (p_value_dict):
+
+	
+
+	genes = p_value_dict.keys()
+
+	p_vals = [p_value_dict[x][2] for x in genes]
+
+#	print p_vals
+
+
+
+	qvals = bh_qvalues(p_vals)
+
+	
+
+	outdict = {}
+
+	for i, gene in enumerate(genes):
+
+		outdict[gene] = [p_value_dict[gene][0], p_value_dict[gene][1], p_vals[i], qvals[i]]
+
+
+
+	return outdict	
+
+
+
+########################
+
+
+
+######### MAIN ########
+
+
+
+def main(argv=None):
+
+	if argv is None:
+
+		argv = sys.argv[1:]
+
+		
+
+	args = 	get_commandline_arguments ()
+
+	
+
+	endo_a_data, endo_a_header = read_to_dict (args.endo_a)
+
+	endo_b_data, endo_b_header = read_to_dict (args.endo_b)
+
+	
+
+	ratiodict_a = calc_ratio (endo_a_data)
+
+	ratiodict_b = calc_ratio (endo_b_data)
+
+	
+
+	p_value_dict = do_chisq (ratiodict_a, ratiodict_b)
+
+	
+
+	q_value_dict = do_FDR (p_value_dict)
+
+
+
+	classified_MEGs_PEGs = enforce_thresholds_and_classify (q_value_dict)
+
+
+
+	# make sensible outfilename
+
+	if "/" in args.endo_a:
+
+		a_file = args.endo_a.split("/")[-1]
+
+	else:
+
+		a_file = args.endo_a
+
+	if "/" in args.endo_b:
+
+		b_file = args.endo_b.split("/")[-1]
+
+	else:
+
+		b_file = args.endo_b
+
+	outfilename = "reciprocal_ratios_and_imprint_categories.{0}.{1}.txt".format(a_file, b_file)
+
+	
+
+	write_output (classified_MEGs_PEGs, outfilename)
+
+
+
+	print "Done!"
+
+	
+
+	
+
+if __name__ == "__main__":
+
+	main(sys.argv[1:])
+
