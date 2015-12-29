@@ -1,0 +1,254 @@
+#!/usr/local/bin/python
+
+# Python 2.7.6
+
+# get_homsites.py
+
+# Mathias Scharmann
+
+# 27 March 2014
+
+
+
+# example usage:
+
+#	python get_homsites.py --rc perparents2_rc.txt --pwc perparents2_pwc.txt --o testoutfile.txt
+
+
+
+	
+
+import os
+
+import sys
+
+import argparse
+
+import numpy
+
+
+
+# diese Funktion checkt ob ein file existiert und stoppt das script wenn ein file nicht exisitiert
+
+def extant_file(x):
+
+	"""
+
+	'Type' for argparse - checks that file exists but does not open.
+
+	"""
+
+	
+
+	if not os.path.exists(x):
+
+		print "Error: {0} does not exist".format(x)
+
+		exit()
+
+	x = str(x)
+
+	return x
+
+
+
+
+
+# diese Funktion checkt ob nicht-UNIX linebreaks vorhanden sind und stoppt das script falls zutreffend
+
+def linebreak_check(x):
+
+
+
+	if "\r" in open(x, "rb").readline():
+
+		print "Error: classic mac (CR) or DOS (CRLF) linebreaks in {0}".format(x)
+
+		exit()
+
+	
+
+# diese Funktion gibt command line arguments mit flag an das script weiter und checkt ob die Angaben plausibel / vollstandig sind
+
+def get_commandline_arguments ():
+
+	
+
+	parser = argparse.ArgumentParser()
+
+		
+
+	parser.add_argument("--endo_a", required=True, type=extant_file,
+
+		help="name / path of first endopserm file", metavar="FILE")
+
+	parser.add_argument("--endo_b", required=True, type=extant_file,
+
+		help="name / path of secod endosperm file", metavar="FILE")
+
+	
+
+	args = parser.parse_args()
+
+	
+
+	linebreak_check(args.endo_a)
+
+	linebreak_check(args.endo_b)
+
+	
+
+	# finish
+
+	return args
+
+	
+
+#############
+
+
+
+	
+
+def read_to_dict (file):
+
+	
+
+	data = {}
+
+	with open(file, "r") as INFILE:
+
+		header = INFILE.readline().strip("\n").split("\t")
+
+		for line in INFILE:
+
+			fields = line.strip("\n").split("\t")
+
+			data[str(fields[0])] = fields[1:]
+
+	
+
+	return data, header
+
+
+
+def add_counts (a_data, b_data):
+
+	
+
+	all_genes = set(a_data.keys()).union(set(b_data.keys()))
+
+	
+
+	print "endo a genes found:	", len(set(a_data.keys()))
+
+	print "endo b genes found:	", len(set(b_data.keys()))
+
+	print "overlap of endo a with endo b genes:	", len(set(a_data.keys()).intersection(set(b_data.keys())))
+
+	print "total genes found:	", len(all_genes)
+
+	
+
+	sumcounts = {}
+
+	for gene in all_genes:
+
+		try:
+
+			a_mat = float(a_data[gene][0])
+
+			a_tot = float(a_data[gene][1])
+
+		except KeyError:
+
+			a_mat = 0.0
+
+			a_tot = 0.0
+
+		try:
+
+			b_mat = float(b_data[gene][0])
+
+			b_tot = float(b_data[gene][1])
+
+		except KeyError:
+
+			b_mat = 0.0
+
+			b_tot = 0.0
+
+		sumcounts[gene] = [a_mat + b_mat, a_tot + b_tot]
+
+		
+
+	return sumcounts	
+
+
+
+def write_output (outdata, header, outfile):
+
+	
+
+	outlines = ["\t".join(header)]
+
+	for gene in sorted(outdata.keys()):
+
+		outlines.append("\t".join([gene, str(outdata[gene][0]), str(outdata[gene][1])]))
+
+	
+
+	#print outlines
+
+	with open(outfile, "w") as OUTFILE:
+
+		OUTFILE.write("\n".join(outlines))
+
+	
+
+
+
+########################
+
+
+
+######### MAIN ########
+
+
+
+def main(argv=None):
+
+	if argv is None:
+
+		argv = sys.argv[1:]
+
+		
+
+	args = 	get_commandline_arguments ()
+
+	
+
+	endo_a_data, endo_a_header = read_to_dict (args.endo_a)
+
+	endo_b_data, endo_b_header = read_to_dict (args.endo_b)
+
+	
+
+	added_data = add_counts (endo_a_data, endo_b_data)
+
+	
+
+	write_output (added_data, endo_a_header, "added_counts.{0}.{1}.txt".format(args.endo_a, args.endo_b))
+
+
+
+	print "Done!"
+
+	
+
+	
+
+if __name__ == "__main__":
+
+	main(sys.argv[1:])
+
